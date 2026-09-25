@@ -21,10 +21,10 @@ index e0e7565..bde908a 100644
  };
  #endif
 diff --git a/lib/usb/usbdevicefactory.cpp b/lib/usb/usbdevicefactory.cpp
-index 07c6084..f0237ca 100644
+index ce22f29..2824b48 100644
 --- a/lib/usb/usbdevicefactory.cpp
 +++ b/lib/usb/usbdevicefactory.cpp
-@@ -168,7 +168,8 @@
+@@ -167,7 +167,8 @@
  #ifndef EXCLUDE_USB_MIDI
  	else if (   pName->Compare ("int1-3-0") == 0
  		 || pName->Compare ("ven582-12a") == 0		// Roland UM-ONE MIDI interface
@@ -35,10 +35,10 @@ index 07c6084..f0237ca 100644
  		pResult = new CUSBMIDIHostDevice (pParent);
  	}
 diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
-index 17c0dd7..acba2b5 100644
+index 724451f..741bd1d 100644
 --- a/lib/usb/usbmidihost.cpp
 +++ b/lib/usb/usbmidihost.cpp
-@@ -38,10 +38,15 @@ CUSBMIDIHostDevice::CUSBMIDIHostDevice (CUSBFunction *pFunction)
+@@ -37,10 +37,15 @@ CUSBMIDIHostDevice::CUSBMIDIHostDevice (CUSBFunction *pFunction)
  	m_pEndpointIn (0),
  	m_pEndpointOut (0),
  	m_pPacketBuffer (0),
@@ -55,16 +55,7 @@ index 17c0dd7..acba2b5 100644
  	// special handling for Roland JD-08
  	if (   pDeviceDesc->idVendor  == 0x0582
  	    && pDeviceDesc->idProduct == 0x028C)
-@@ -81,7 +86,7 @@ boolean CUSBMIDIHostDevice::Configure (void)
- 
- 		return FALSE;
- 	}
--	// special handling for Roland UM-ONE and JD-08
-+	// special handling for devices without standard MIDI class endpoint descriptors
- 	const TUSBDeviceDescriptor *pDeviceDesc = GetDevice ()->GetDeviceDescriptor ();
- 	assert (pDeviceDesc != 0);
- 	boolean bIsRoland =    pDeviceDesc->idVendor == 0x0582
-@@ -101,7 +106,7 @@ boolean CUSBMIDIHostDevice::Configure (void)
+@@ -100,7 +105,7 @@ boolean CUSBMIDIHostDevice::Configure (void)
  		{
  			continue;
  		}
@@ -73,19 +64,7 @@ index 17c0dd7..acba2b5 100644
  		{
  			TUSBMIDIStreamingEndpointDescriptor *pMIDIDesc =
  				(TUSBMIDIStreamingEndpointDescriptor *) GetDescriptor (DESCRIPTOR_CS_ENDPOINT);
-@@ -157,6 +162,11 @@ boolean CUSBMIDIHostDevice::Configure (void)
- 
- 		return FALSE;
- 	}
-+
-+	if (m_bIsCMEUF)
-+	{
-+		CLogger::Get ()->Write (FromMIDI, LogNotice, "Using CME UF USB MIDI quirk");
-+	}
- 	// attach interface device
- 	assert (m_pInterface == 0);
- 	m_pInterface = new CUSBMIDIDevice;
-@@ -209,18 +219,174 @@ boolean CUSBMIDIHostDevice::StartRequest (void)
+@@ -199,18 +204,178 @@ boolean CUSBMIDIHostDevice::StartRequest (void)
  	return GetHost ()->SubmitAsyncRequest (pURB);
  }
  
@@ -200,16 +179,20 @@ index 17c0dd7..acba2b5 100644
 +
 +			if (pBuffer[1] == 0xF0)
 +			{
-+				u8 *pEOX = pBuffer + 2;
-+				unsigned nSearchLength = nRemaining - 2;
-+
-+				while (nSearchLength > 1 && *pEOX != 0xF7)
++				unsigned nEOX = 2;
++				while (nEOX < nRemaining && pBuffer[nEOX] != 0xF7)
 +				{
-+					pEOX++;
-+					nSearchLength--;
++					nEOX++;
 +				}
 +
-+				nDataLength = (unsigned) (pEOX - pBuffer);
++				if (nEOX >= nRemaining)
++				{
++					CLogger::Get ()->Write (FromMIDI, LogWarning,
++								"CME SysEx without EOX");
++					break;
++				}
++
++				nDataLength = nEOX;
 +				nSourceLength = nDataLength + 1;
 +			}
 +			else if (pBuffer[1] == 0xF2)
