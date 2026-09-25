@@ -1,7 +1,30 @@
+diff --git a/include/circle/usb/usbmidihost.h b/include/circle/usb/usbmidihost.h
+index fa595cb..2ea899f 100644
+--- a/include/circle/usb/usbmidihost.h
++++ b/include/circle/usb/usbmidihost.h
+@@ -41,6 +41,9 @@ public:
+ private:
+ 	boolean StartRequest (void);
+ 
++	boolean ProcessCMEInput (u8 *pBuffer, unsigned nLength);
++	boolean ForwardCMEMessage (unsigned nCable, const u8 *pData, unsigned nLength);
++
+ 	void CompletionRoutine (CUSBRequest *pURB);
+ 	static void CompletionStub (CUSBRequest *pURB, void *pParam, void *pContext);
+ 
+@@ -57,5 +60,7 @@ private:
+ 	u8 *m_pPacketBuffer;
+ 
+ 	TKernelTimerHandle m_hTimer;
++
++	boolean m_bIsCMEUF;
+ };
+ #endif
 diff --git a/lib/usb/usbdevicefactory.cpp b/lib/usb/usbdevicefactory.cpp
+index b5a90c4..1e61627 100644
 --- a/lib/usb/usbdevicefactory.cpp
 +++ b/lib/usb/usbdevicefactory.cpp
-@@ -167,7 +167,8 @@
+@@ -168,7 +168,8 @@
  #ifndef EXCLUDE_USB_MIDI
  	else if (   pName->Compare ("int1-3-0") == 0
  		 || pName->Compare ("ven582-12a") == 0		// Roland UM-ONE MIDI interface
@@ -11,31 +34,11 @@ diff --git a/lib/usb/usbdevicefactory.cpp b/lib/usb/usbdevicefactory.cpp
  	{
  		pResult = new CUSBMIDIHostDevice (pParent);
  	}
-diff --git a/include/circle/usb/usbmidihost.h b/include/circle/usb/usbmidihost.h
---- a/include/circle/usb/usbmidihost.h
-+++ b/include/circle/usb/usbmidihost.h
-@@ -39,6 +39,10 @@
- 	static boolean SendEventsHandler (const u8 *pData, unsigned nLength, void *pParam);
- private:
- 	boolean StartRequest (void);
-+
-+	boolean ProcessCMEInput (u8 *pBuffer, unsigned nLength);
-+	boolean ForwardCMEMessage (unsigned nCable, const u8 *pData, unsigned nLength);
-
- 	void CompletionRoutine (CUSBRequest *pURB);
- 	static void CompletionStub (CUSBRequest *pURB, void *pParam, void *pContext);
-@@ -56,6 +60,8 @@
- 	u8 *m_pPacketBuffer;
-
- 	TKernelTimerHandle m_hTimer;
-+
-+	boolean m_bIsCMEUF;
- };
- #endif
 diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
+index 43c5b09..4f9b043 100644
 --- a/lib/usb/usbmidihost.cpp
 +++ b/lib/usb/usbmidihost.cpp
-@@ -37,10 +37,16 @@
+@@ -38,10 +38,15 @@ CUSBMIDIHostDevice::CUSBMIDIHostDevice (CUSBFunction *pFunction)
  	m_pEndpointIn (0),
  	m_pEndpointOut (0),
  	m_pPacketBuffer (0),
@@ -52,8 +55,8 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
  	// special handling for Roland JD-08
  	if (   pDeviceDesc->idVendor  == 0x0582
  	    && pDeviceDesc->idProduct == 0x028C)
-@@ -80,7 +86,7 @@
-
+@@ -81,12 +86,15 @@ boolean CUSBMIDIHostDevice::Configure (void)
+ 
  		return FALSE;
  	}
 -	// special handling for Roland UM-ONE and JD-08
@@ -61,17 +64,25 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
  	const TUSBDeviceDescriptor *pDeviceDesc = GetDevice ()->GetDeviceDescriptor ();
  	assert (pDeviceDesc != 0);
  	boolean bIsRoland =    pDeviceDesc->idVendor == 0x0582
-@@ -100,7 +106,7 @@
+ 			    && (   pDeviceDesc->idProduct == 0x012A
+ 			        || pDeviceDesc->idProduct == 0x028C);
++	boolean bIsCMEUF =     pDeviceDesc->idVendor  == 0x7104
++			    && pDeviceDesc->idProduct == 0x2202;
++
+ 	// Our strategy for now is simple: we'll take the first MIDI streaming
+ 	// bulk-in endpoint on this interface we can find.  To distinguish
+ 	// between the MIDI streaming bulk-in endpoints we want (which carry
+@@ -101,7 +109,7 @@ boolean CUSBMIDIHostDevice::Configure (void)
  		{
  			continue;
  		}
 -		if (!bIsRoland)
-+		if (!bIsRoland && !m_bIsCMEUF)
++		if (!bIsRoland && !bIsCMEUF)
  		{
  			TUSBMIDIStreamingEndpointDescriptor *pMIDIDesc =
  				(TUSBMIDIStreamingEndpointDescriptor *) GetDescriptor (DESCRIPTOR_CS_ENDPOINT);
-@@ -157,6 +163,11 @@
-
+@@ -158,6 +166,11 @@ boolean CUSBMIDIHostDevice::Configure (void)
+ 
  		return FALSE;
  	}
 +
@@ -82,17 +93,17 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
  	// attach interface device
  	assert (m_pInterface == 0);
  	m_pInterface = new CUSBMIDIDevice;
-@@ -198,20 +209,128 @@
+@@ -200,18 +213,176 @@ boolean CUSBMIDIHostDevice::StartRequest (void)
  	return GetHost ()->SubmitAsyncRequest (pURB);
  }
-
+ 
 +boolean CUSBMIDIHostDevice::ForwardCMEMessage (unsigned nCable, const u8 *pData,
 +					       unsigned nLength)
 +{
 +	assert (m_pInterface != 0);
 +	assert (pData != 0);
 +
-+	if (nCable > 15 || nLength == 0)
++	if (nCable > 15 || nLength == 0 || nLength > 3 && pData[0] != 0xF0)
 +	{
 +		return FALSE;
 +	}
@@ -166,11 +177,6 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
 +		break;
 +	}
 +
-+	if (nLength > 3)
-+	{
-+		return FALSE;
-+	}
-+
 +	u8 Packet[CUSBMIDIDevice::EventPacketSize] = {0, 0, 0, 0};
 +	Packet[0] = (u8) ((nCable << 4) | nCIN);
 +	memcpy (&Packet[1], pData, nLength);
@@ -216,6 +222,10 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
 +			{
 +				nDataLength = 3;
 +			}
++			else if (pBuffer[1] == 0xF1 || pBuffer[1] == 0xF3)
++			{
++				nDataLength = 2;
++			}
 +
 +			if (ForwardCMEMessage (pBuffer[0] >> 4, &pBuffer[1], nDataLength))
 +			{
@@ -242,7 +252,7 @@ diff --git a/lib/usb/usbmidihost.cpp b/lib/usb/usbmidihost.cpp
  {
  	assert (pURB != 0);
  	assert (m_pInterface != 0);
-
+ 
  	boolean bRestart = FALSE;
 -	if (   pURB->GetStatus () != 0
 -	    && pURB->GetResultLength () % CUSBMIDIDevice::EventPacketSize == 0)
