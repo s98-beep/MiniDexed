@@ -15,7 +15,7 @@ git checkout -f --recurse-submodules b42d060
 cd -
 
 # Apply CME UF5/UF6/UF7/UF8 USB-MIDI compatibility patch
-git -C circle-stdlib/libs/circle apply "$PWD/cme-uf-usbmidi.patch"
+python3 "$PWD/apply_cme_uf.py"
 #cd circle-stdlib/libs/circle-newlib
 #git checkout develop
 #cd -
