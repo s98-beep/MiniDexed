@@ -12,6 +12,25 @@ def replace_once(relpath: str, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
     print(f"patched: {relpath}")
 
+def replace_function(relpath: str, start_marker: str, end_marker: str, new_text: str) -> None:
+    path = ROOT / relpath
+    text = path.read_text(encoding="utf-8")
+
+    start = text.find(start_marker)
+    if start < 0:
+        raise SystemExit(f"{relpath}: start marker not found: {start_marker}")
+
+    end = text.find(end_marker, start)
+    if end < 0:
+        raise SystemExit(f"{relpath}: end marker not found: {end_marker}")
+
+    if text.find(start_marker, start + 1) >= 0:
+        raise SystemExit(f"{relpath}: start marker occurs more than once")
+
+    text = text[:start] + new_text.rstrip() + "\n\n" + text[end:]
+    path.write_text(text, encoding="utf-8", newline="\n")
+    print(f"patched function: {relpath}")
+
 replace_once(
     "lib/usb/usbdevicefactory.cpp",
     '''\telse if (   pName->Compare ("int1-3-0") == 0
@@ -46,45 +65,6 @@ replace_once(
     '''\t\tif (!bIsRoland && !bIsCMEUF)
 '''
 )
-
-old_completion = r'''void CUSBMIDIHostDevice::CompletionRoutine (CUSBRequest *pURB)
-{
-	assert (pURB != 0);
-	assert (m_pInterface != 0);
-
-	boolean bRestart = FALSE;
-	if (   pURB->GetStatus () != 0
-	    && pURB->GetResultLength () % CUSBMIDIDevice::EventPacketSize == 0)
-	{
-		assert (m_pPacketBuffer != 0);
-		bRestart = m_pInterface->CallPacketHandler (m_pPacketBuffer,
-							    pURB->GetResultLength ());
-	}
-	else if (   m_pInterface->GetAllSoundOffOnUSBError ()
-		 && !pURB->GetStatus ()
-		 && pURB->GetUSBError () != USBErrorUnknown)
-	{
-		for (u8 nChannel = 0; nChannel < 16; nChannel++)
-		{
-			u8 AllSoundOff[] = {0x0B, (u8) (0xB0 | nChannel), 120, 0};
-			m_pInterface->CallPacketHandler (AllSoundOff,  sizeof AllSoundOff);
-		}
-	}
-
-	delete pURB;
-	if (   bRestart
-	    || CKernelOptions::Get ()->GetUSBBoost ())
-	{
-		StartRequest ();
-	}
-	else
-	{
-		assert (m_hTimer == 0);
-		m_hTimer = CTimer::Get ()->StartKernelTimer (MSEC2HZ (10), TimerStub, 0, this);
-		assert (m_hTimer != 0);
-	}
-}
-'''
 
 new_completion = r'''void CUSBMIDIHostDevice::CompletionRoutine (CUSBRequest *pURB)
 {
@@ -225,12 +205,12 @@ new_completion = r'''void CUSBMIDIHostDevice::CompletionRoutine (CUSBRequest *pU
 		m_hTimer = CTimer::Get ()->StartKernelTimer (MSEC2HZ (10), TimerStub, 0, this);
 		assert (m_hTimer != 0);
 	}
-}
-'''
+}'''
 
-replace_once(
+replace_function(
     "lib/usb/usbmidihost.cpp",
-    old_completion,
+    "void CUSBMIDIHostDevice::CompletionRoutine (CUSBRequest *pURB)",
+    "void CUSBMIDIHostDevice::CompletionStub (CUSBRequest *pURB, void *pParam, void *pContext)",
     new_completion
 )
 
