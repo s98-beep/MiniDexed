@@ -157,9 +157,15 @@ jobs:
           pattern: MiniDexed_*
           merge-multiple: true
           path: combined
-          
-- name: Upload combined ZIP artifact
-  uses: actions/upload-artifact@v4
-  with:
-    name: MiniDexed_combined
-    path: MiniDexed_*.zip
+
+      - name: Create combined ZIP file
+        run: |
+          cd combined
+          zip -r ../MiniDexed_${{ github.run_number }}_${{ needs.build64.outputs.git_info }}.zip .
+          cd ..
+
+      - name: Upload combined ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniDexed_combined
+          path: MiniDexed_*.zip
